@@ -1,0 +1,46 @@
+name: Pruebas
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pruebas:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13" # la versión de Python que usa Colab
+
+      - name: Dependencias
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          python -m pip install --quiet numpy pytest
+
+      - name: Código fuente de coqui-tts en la versión que fija la celda 1
+        run: |
+          version=$(python - <<'PY'
+          import json, re
+          cuaderno = json.load(open("Clonador_de_voz_XTTS.ipynb", encoding="utf-8"))
+          fuente = "".join("".join(celda["source"]) for celda in cuaderno["cells"])
+          print(re.search(r'VERSION_COQUI_TTS = "([^"]+)"', fuente).group(1))
+          PY
+          )
+          echo "coqui-tts $version"
+          git clone --quiet --depth 1 --branch "v$version" https://github.com/idiap/coqui-ai-TTS "$RUNNER_TEMP/coqui-ai-tts"
+
+      - name: Carpeta /content, como en Colab
+        run: sudo mkdir -p /content && sudo chown "$(id -u):$(id -g)" /content
+
+      - name: Pruebas
+        env:
+          COQUI_TTS_SRC: ${{ runner.temp }}/coqui-ai-tts
+        run: python -m pytest pruebas -q
