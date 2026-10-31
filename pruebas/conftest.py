@@ -83,10 +83,21 @@ class Sesion:
         return self.ns["ErrorUsuario"]
 
 
+def crear_bin_con_gpu(carpeta: Path) -> Path:
+    """`nvidia-smi` simulado, creado al vuelo: el permiso de ejecución se pierde al descomprimir en Windows o al
+    subir archivos por la web de GitHub, así que no puede venir en el repositorio."""
+    carpeta.mkdir(parents=True, exist_ok=True)
+    nvidia_smi = carpeta / "nvidia-smi"
+    nvidia_smi.write_text('#!/bin/sh\necho "Tesla T4, 15360 MiB"\n', encoding="utf-8")
+    nvidia_smi.chmod(0o755)
+    return carpeta
+
+
 class Colab:
-    def __init__(self, sitio: Path, monkeypatch) -> None:
+    def __init__(self, sitio: Path, monkeypatch, bin_gpu: Path) -> None:
         self.sitio = sitio
         self.monkeypatch = monkeypatch
+        self.bin_gpu = bin_gpu
 
     def instalar(self, nombre: str, version: str) -> None:
         carpeta = self.sitio / f"{nombre.replace('-', '_')}-{version}.dist-info"
@@ -101,7 +112,7 @@ class Colab:
             self.instalar(nombre, version)
 
     def sin_gpu(self) -> None:
-        self.monkeypatch.setenv("PATH", os.environ["PATH"].replace(str(STUBS / "bin") + os.pathsep, ""))
+        self.monkeypatch.setenv("PATH", os.environ["PATH"].replace(str(self.bin_gpu) + os.pathsep, ""))
 
     def sesion(self) -> Sesion:
         return Sesion()
@@ -116,7 +127,8 @@ def colab(tmp_path, monkeypatch):
             shutil.rmtree(hijo)
         else:
             hijo.unlink()
-    monkeypatch.setenv("PATH", str(STUBS / "bin") + os.pathsep + os.environ["PATH"])
+    bin_gpu = crear_bin_con_gpu(tmp_path / "bin")
+    monkeypatch.setenv("PATH", str(bin_gpu) + os.pathsep + os.environ["PATH"])
     monkeypatch.delenv("COQUI_TOS_AGREED", raising=False)
     sitio = tmp_path / "sitio"
     sitio.mkdir()
@@ -139,7 +151,7 @@ def colab(tmp_path, monkeypatch):
     monkeypatch.setattr(
         os.path, "ismount", lambda ruta: (drive.montado and os.fspath(ruta) == "/content/drive") or es_montaje_real(ruta)
     )
-    yield Colab(sitio, monkeypatch)
+    yield Colab(sitio, monkeypatch, bin_gpu)
 
 
 @pytest.fixture
