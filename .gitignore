@@ -2,3 +2,21 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .ipynb_checkpoints/
+
+# Grabaciones y audios generados: tu voz nunca va al repositorio
+*.wav
+*.mp3
+*.m4a
+*.aac
+*.ogg
+*.oga
+*.opus
+*.flac
+*.wma
+*.amr
+*.webm
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.3gp
