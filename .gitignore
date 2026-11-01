@@ -20,3 +20,10 @@ __pycache__/
 *.mkv
 *.avi
 *.3gp
+
+# Tus perfiles de voz, modelos afinados y subtítulos viven en tu Drive, nunca aquí
+*.npz
+*.pt
+*.pth
+*.safetensors
+*.srt

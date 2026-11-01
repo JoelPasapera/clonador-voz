@@ -11,7 +11,7 @@ permissions:
 jobs:
   pruebas:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -25,17 +25,19 @@ jobs:
           sudo apt-get install -y -qq ffmpeg
           python -m pip install --quiet numpy pytest
 
-      - name: Código fuente de coqui-tts en la versión que fija la celda 1
+      - name: Código fuente de las librerías en las versiones que fija la celda 1
         run: |
-          version=$(python - <<'PY'
-          import json, re
-          cuaderno = json.load(open("Clonador_de_voz_XTTS.ipynb", encoding="utf-8"))
-          fuente = "".join("".join(celda["source"]) for celda in cuaderno["cells"])
-          print(re.search(r'VERSION_COQUI_TTS = "([^"]+)"', fuente).group(1))
-          PY
-          )
-          echo "coqui-tts $version"
-          git clone --quiet --depth 1 --branch "v$version" https://github.com/idiap/coqui-ai-TTS "$RUNNER_TEMP/coqui-ai-tts"
+          coqui=$(python pruebas/version_fijada.py VERSION_COQUI_TTS)
+          whisper=$(python pruebas/version_fijada.py VERSION_FASTER_WHISPER)
+          chatterbox=$(python pruebas/version_fijada.py VERSION_CHATTERBOX)
+          echo "coqui-tts $coqui · faster-whisper $whisper · chatterbox-tts $chatterbox"
+          git clone --quiet --depth 1 --branch "v$coqui" https://github.com/idiap/coqui-ai-TTS "$RUNNER_TEMP/coqui-ai-tts"
+          git clone --quiet --depth 1 --branch "v$whisper" https://github.com/SYSTRAN/faster-whisper "$RUNNER_TEMP/faster-whisper"
+          # chatterbox-tts no etiqueta sus versiones en GitHub: este es el commit publicado en PyPI como 0.1.7.
+          # Si cambias VERSION_CHATTERBOX, actualiza también este commit (test_fidelidad compara las versiones).
+          git init --quiet "$RUNNER_TEMP/chatterbox"
+          git -C "$RUNNER_TEMP/chatterbox" fetch --quiet --depth 1 https://github.com/resemble-ai/chatterbox 59bc590b3cad826e5d5987745bf6844627a21ad5
+          git -C "$RUNNER_TEMP/chatterbox" checkout --quiet FETCH_HEAD
 
       - name: Carpeta /content, como en Colab
         run: sudo mkdir -p /content && sudo chown "$(id -u):$(id -g)" /content
@@ -43,4 +45,6 @@ jobs:
       - name: Pruebas
         env:
           COQUI_TTS_SRC: ${{ runner.temp }}/coqui-ai-tts
+          FASTER_WHISPER_SRC: ${{ runner.temp }}/faster-whisper
+          CHATTERBOX_SRC: ${{ runner.temp }}/chatterbox
         run: python -m pytest pruebas -q

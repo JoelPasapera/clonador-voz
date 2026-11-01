@@ -1,0 +1,84 @@
+name: Prueba real (semanal)
+
+# Ejecuta las celdas del cuaderno con las librerías y los modelos de verdad (en CPU, sin GPU), instalados con el
+# mismo código de la celda 1. Avisa si una versión nueva de algo de lo que depende el cuaderno lo rompió.
+on:
+  schedule:
+    - cron: "23 9 * * 1" # lunes 09:23 UTC (04:23 en Lima)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  xtts:
+    name: XTTS-v2
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: FFmpeg y PyTorch para CPU (Colab trae torch preinstalado)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          python -m pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Librerías, con el código de la celda 1
+        working-directory: pruebas/real
+        run: python preparar_entorno.py xtts
+
+      - name: Caché de modelos
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/share/tts
+            ~/.cache/huggingface
+          key: modelos-xtts-${{ hashFiles('Clonador_de_voz_XTTS.ipynb') }}
+          restore-keys: modelos-xtts-
+
+      - name: Carpeta /content, como en Colab
+        run: sudo mkdir -p /content && sudo chown "$(id -u):$(id -g)" /content
+
+      - name: Prueba real
+        working-directory: pruebas/real
+        run: python prueba_real_xtts.py
+
+  chatterbox:
+    name: Chatterbox
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: FFmpeg y PyTorch para CPU (Colab trae torch preinstalado)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          python -m pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Librerías, con el código de la celda 1
+        working-directory: pruebas/real
+        run: python preparar_entorno.py chatterbox
+
+      - name: Caché de modelos
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: modelos-chatterbox-${{ hashFiles('Clonador_de_voz_XTTS.ipynb') }}
+          restore-keys: modelos-chatterbox-
+
+      - name: Carpeta /content, como en Colab
+        run: sudo mkdir -p /content && sudo chown "$(id -u):$(id -g)" /content
+
+      - name: Prueba real
+        working-directory: pruebas/real
+        run: python prueba_real_chatterbox.py

@@ -1,10 +1,10 @@
-"""Idiomas mezclados: tramos (celda 2) y su paso por la generación (celda 5)."""
+"""Idiomas mezclados: tramos (celda 2c) y su paso por la generación (celda 6)."""
 
 DISPONIBLES = frozenset({"es", "en", "fr", "pt", "it", "de"})
 
 
 def tramos(funciones, texto, principal="es"):
-    resultado, avisos = funciones.ns["dividir_por_idioma"](texto, principal, DISPONIBLES)
+    resultado, avisos = funciones.ns["dividir_en_tramos"](texto, principal, DISPONIBLES)
     return [(t.texto, t.idioma) for t in resultado], avisos
 
 
@@ -45,13 +45,14 @@ def opciones(funciones, pausa=0.3, cifras=True, reglas=""):
 
 
 def test_segmentos_con_idioma_y_pausas_en_las_fronteras(con_voz, capsys):
-    con_voz.definir("generar")  # solo las funciones de la celda 5, sin generar
+    con_voz.ejecutar("guion")
+    con_voz.definir("generar")  # solo las funciones de la celda 6, sin generar
     preparar = con_voz.ns["preparar_segmentos"]
     texto = (
         "Escucha y repite con atención: [en]Where is the library, please?[/en] Ahora en francés: "
         "[fr]Où est la bibliothèque ?[/fr] [pausa 2] Muy bien, sigamos.\n[en]See you tomorrow, everybody![/en]"
     )
-    segmentos = preparar(texto, "es", opciones(con_voz, reglas="library = laibreri; sigamos = sigamos ya"))
+    segmentos = preparar(texto, "es", opciones(con_voz, reglas="library = laibreri; sigamos = sigamos ya"), DISPONIBLES)
     assert [(s.texto, s.idioma, s.pausa) for s in segmentos] == [
         ("Escucha y repite con atención:", "es", 0.3),
         ("Where is the library, please?", "en", 0.3),  # las reglas solo tocan el idioma principal
@@ -66,9 +67,10 @@ def test_segmentos_con_idioma_y_pausas_en_las_fronteras(con_voz, capsys):
 
 
 def test_cifras_en_tramos_en_espanol_aunque_el_principal_sea_otro(con_voz):
+    con_voz.ejecutar("guion")
     con_voz.definir("generar")
     preparar = con_voz.ns["preparar_segmentos"]
-    segmentos = preparar("The course costs $20 here. [es]En Lima cuesta S/ 1,500.50 al mes.[/es]", "en", opciones(con_voz))
+    segmentos = preparar("The course costs $20 here. [es]En Lima cuesta S/ 1,500.50 al mes.[/es]", "en", opciones(con_voz), DISPONIBLES)
     assert [(s.texto, s.idioma) for s in segmentos] == [
         ("The course costs $20 here.", "en"),  # en inglés lo resuelve el propio modelo
         ("En Lima cuesta mil quinientos soles con cincuenta céntimos al mes.", "es"),
@@ -78,8 +80,7 @@ def test_cifras_en_tramos_en_espanol_aunque_el_principal_sea_otro(con_voz):
 def test_idiomas_mezclados_en_el_flujo(con_voz):
     from TTS import api
 
-    con_voz.ejecutar(
-        "generar",
+    con_voz.generar(
         texto="La palabra del día es: [en]library, a place full of books.[/en] Repite conmigo, por favor.",
         formato="wav",
         guardar_en_drive=False,
@@ -91,3 +92,28 @@ def test_idiomas_mezclados_en_el_flujo(con_voz):
         ("Repite conmigo, por favor.", "es"),
     ]
     assert con_voz.ns["ULTIMA_GENERACION"].tomas[0].archivo.is_file()
+
+
+# ── Voces ([voz: …]) ────────────────────────────────────────────────────────────
+
+
+def tramos_con_voz(funciones, texto):
+    resultado, avisos = funciones.ns["dividir_en_tramos"](texto, "es", DISPONIBLES)
+    return [(t.texto, t.idioma, t.voz) for t in resultado], avisos
+
+
+def test_etiquetas_de_voz(funciones):
+    assert tramos_con_voz(funciones, "Hola. [voz: Ana Florence]¿Qué tal?[/voz] Bien.")[0] == [
+        ("Hola. ", "es", ""), ("¿Qué tal?", "es", "Ana Florence"), (" Bien.", "es", ""),
+    ]
+
+
+def test_voz_e_idioma_son_independientes(funciones):
+    texto = "[Voz=Carlos]Hola [en]my friend[/en], ¿cómo estás?\n[voz]Fin."
+    assert tramos_con_voz(funciones, texto)[0] == [
+        ("Hola ", "es", "Carlos"), ("my friend,", "en", "Carlos"), (" ¿cómo estás?\n", "es", "Carlos"), ("Fin.", "es", ""),
+    ]
+
+
+def test_espacios_en_el_nombre_de_la_voz(funciones):
+    assert tramos_con_voz(funciones, "[voz:   Ana    Florence  ]Hola a todos.")[0] == [("Hola a todos.", "es", "Ana Florence")]

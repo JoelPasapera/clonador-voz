@@ -1,4 +1,5 @@
-"""Banco de pruebas: ejecuta las celdas REALES del .ipynb en un «Colab» simulado (Drive, GPU, torch y XTTS falsos)."""
+"""Banco de pruebas: ejecuta las celdas REALES del .ipynb en un «Colab» simulado (Drive, GPU, torch, XTTS, Chatterbox
+y Whisper falsos; FFmpeg real)."""
 
 import importlib
 import json
@@ -15,6 +16,8 @@ import pytest
 RAIZ = Path(__file__).resolve().parent.parent
 STUBS = Path(__file__).resolve().parent / "stubs"
 CUADERNO = RAIZ / "Clonador_de_voz_XTTS.ipynb"
+CUADERNO_ENTRENAMIENTO = RAIZ / "Entrenar_XTTS_con_tu_voz.ipynb"
+CUADERNOS = (CUADERNO, CUADERNO_ENTRENAMIENTO)
 MARCADOR = "# ─── Ejecución ───"
 CONTENT = Path("/content")
 MI_UNIDAD = CONTENT / "drive" / "MyDrive"
@@ -24,8 +27,16 @@ sys.path.insert(0, str(STUBS))
 
 
 def celdas_de_codigo() -> dict[str, str]:
-    cuaderno = json.loads(CUADERNO.read_text(encoding="utf-8"))
-    return {c["metadata"]["id"]: "".join(c["source"]) for c in cuaderno["cells"] if c["cell_type"] == "code"}
+    """Las celdas de código de los dos cuadernos; las comunes (entorno y funciones) son idénticas en ambos."""
+    celdas: dict[str, str] = {}
+    for ruta in CUADERNOS:
+        cuaderno = json.loads(ruta.read_text(encoding="utf-8"))
+        for c in cuaderno["cells"]:
+            if c["cell_type"] != "code":
+                continue
+            fuente = "".join(c["source"])
+            assert celdas.setdefault(c["metadata"]["id"], fuente) == fuente, f"la celda {c['metadata']['id']} difiere"
+    return celdas
 
 
 def con_parametros(fuente: str, **valores) -> str:
@@ -75,6 +86,23 @@ class Sesion:
         for celda in ("archivos", "audio", "texto"):
             self.ejecutar(celda)
 
+    def parametros_de(self, celda: str) -> set[str]:
+        return {m["nombre"] for linea in self.fuentes[celda].split("\n") if (m := PATRON_PARAM.match(linea))}
+
+    def generar(self, texto: str | None = None, **parametros) -> None:
+        """Lo que hace el usuario: celda 5 (escribe en el cuadro o elige un .txt) y celda 6 (genera).
+
+        Cada parámetro va a la celda que lo tiene en su formulario.
+        """
+        del_guion = {k: v for k, v in parametros.items() if k in self.parametros_de("guion")}
+        resto = {k: v for k, v in parametros.items() if k not in del_guion}
+        if del_guion.get("archivo_de_texto"):
+            del_guion.setdefault("fuente_del_texto", "Archivo .txt de Drive")
+        self.ejecutar("guion", **del_guion)
+        if texto is not None:
+            self.ns["CUADRO"].value = texto
+        self.ejecutar("generar", **resto)
+
     def solo_ejecucion(self, celda: str, **parametros) -> None:
         _, _, ejecucion = con_parametros(self.fuentes[celda], **parametros).partition(MARCADOR)
         self._correr(ejecucion, celda)
@@ -105,10 +133,13 @@ class Colab:
         (carpeta / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {nombre}\nVersion: {version}\n")
         importlib.invalidate_caches()
 
-    def instalar_todo(self) -> None:
-        for nombre, version in [
-            ("torch", "2.10.0+cu126"), ("torchaudio", "2.10.0+cu126"), ("torchcodec", "0.10.0"), ("coqui-tts", "0.28.0"),
-        ]:
+    def instalar_todo(self, motor: str = "xtts") -> None:
+        paquetes = [("torch", "2.10.0+cu126"), ("torchaudio", "2.10.0+cu126")]
+        if motor == "xtts":
+            paquetes += [("torchcodec", "0.10.0"), ("coqui-tts", "0.28.0")]
+        else:  # el torch simulado no cambia de versión: basta con que chatterbox-tts figure instalado
+            paquetes += [("chatterbox-tts", "0.1.7"), ("torchvision", "0.21.0")]
+        for nombre, version in paquetes:
             self.instalar(nombre, version)
 
     def sin_gpu(self) -> None:
@@ -134,13 +165,29 @@ def colab(tmp_path, monkeypatch):
     sitio.mkdir()
     monkeypatch.syspath_prepend(str(sitio))
 
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "datos"))  # donde coqui-tts «descarga» XTTS-v2
+    monkeypatch.setenv("HF_HOME", str(tmp_path / "hf"))
+    monkeypatch.delenv("TTS_HOME", raising=False)
+
+    import faster_whisper
+    import huggingface_hub
+    import simulacion
     import torch
+    from chatterbox import mtl_tts
     from google.colab import drive, files
     from IPython import display
     from TTS import api
+    from TTS.demos.xtts_ft_demo.utils import gpt_train
 
     torch.cuda.disponible = True
-    api.registro.update(cargas=0, inferencias=[], speaker=[], gpt=[])
+    torch.cuda.vaciados = 0
+    api.registro.update(cargas=0, inferencias=[], speaker=[], gpt=[], puntos_de_control=[])
+    mtl_tts.registro.update(cargas=0, generaciones=[], referencias=[])
+    simulacion.reiniciar()
+    faster_whisper.cargados.clear()
+    faster_whisper.transcripciones.clear()
+    gpt_train.llamadas.clear()
+    huggingface_hub.descargas.clear()
     drive.montajes.clear()
     drive.fallos_pendientes = 0
     drive.montado = False
@@ -174,6 +221,25 @@ def con_voz(lista):
 
 
 @pytest.fixture
+def con_chatterbox(colab):
+    """Sesión con Chatterbox elegido en la celda 1 y la voz creada (celdas 1 a 4)."""
+    colab.instalar_todo("chatterbox")
+    sesion = colab.sesion()
+    sesion.ejecutar("entorno", modelo="Chatterbox Multilingual (uso comercial)")
+    sesion.cargar_funciones()
+    sesion.ejecutar("modelo")
+    crear_grabacion(MI_UNIDAD / "mi_voz.wav", voz_s=15.0)
+    sesion.ejecutar("referencia")
+    return sesion
+
+
+def audios_en_drive(carpeta: str = "Clonador de voz") -> list[str]:
+    """Archivos de audio o subtítulos guardados en esa carpeta de Drive (sin contar voces ni modelos)."""
+    ruta = MI_UNIDAD / carpeta
+    return sorted(p.name for p in ruta.iterdir() if p.is_file()) if ruta.is_dir() else []
+
+
+@pytest.fixture
 def funciones(colab):
     """Sesión con las funciones base cargadas (sin pasar por la instalación)."""
     sesion = colab.sesion()
@@ -192,12 +258,16 @@ def senal_de_voz(segundos: float, frecuencia: int = 44100, f0: float = 140.0, am
     return (amplitud * envolvente * (np.sin(2 * np.pi * f0 * t) + 0.4 * np.sin(2 * np.pi * 3 * f0 * t)) / 1.4).astype(np.float32)
 
 
-def crear_grabacion(destino: Path, *, voz_s: float, silencio_ini: float = 1.0, silencio_fin: float = 1.5) -> Path:
-    """Grabación de prueba (silencio + voz + silencio) en el formato que indique la extensión del destino."""
+def crear_grabacion(
+    destino: Path, *, voz_s: float, silencio_ini: float = 1.0, silencio_fin: float = 1.5, f0: float = 140.0
+) -> Path:
+    """Grabación de prueba (silencio + voz + silencio) en el formato que indique la extensión del destino.
+
+    `f0` es la «voz» de la grabación: los modelos simulados la usan como huella del hablante."""
     frecuencia = 44100
     muestras = np.concatenate([
         np.zeros(int(silencio_ini * frecuencia), np.float32),
-        senal_de_voz(voz_s, frecuencia),
+        senal_de_voz(voz_s, frecuencia, f0=f0),
         np.zeros(int(silencio_fin * frecuencia), np.float32),
     ])
     destino.parent.mkdir(parents=True, exist_ok=True)

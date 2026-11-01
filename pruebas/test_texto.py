@@ -96,3 +96,86 @@ def test_aleatorio_no_pierde_palabras_ni_excede_limites(funciones):
         assert all(0 < len(s.texto) <= limite for s in segmentos)
         esperado = re.findall(r"\S+", re.sub(r"\[pausa[^\]]*\]", " ", texto, flags=re.IGNORECASE))
         assert re.findall(r"\S+", " ".join(textos(segmentos))) == esperado
+
+
+# ── v2: lotes, subtítulos y comparación de textos ───────────────────────────────
+
+
+def test_bloques_con_titulos_y_separadores(funciones):
+    bloques = funciones.ns["dividir_en_bloques"](
+        "# Capítulo 1\nHola mundo.\n---\n   \n  ----  \n#Dos\nAdiós.\n---\n# Solo título\n---\nSin título."
+    )
+    assert [(b.titulo, b.texto.strip()) for b in bloques] == [("Capítulo 1", "Hola mundo."), ("Dos", "Adiós."), ("", "Sin título.")]
+    assert [b.texto for b in funciones.ns["dividir_en_bloques"]("Un solo bloque - con guiones -- sueltos.")] == [
+        "Un solo bloque - con guiones -- sueltos."
+    ]
+
+
+def test_subtitulos_srt(funciones):
+    srt = funciones.ns["subtitulos_srt"]([
+        (0.0, 3.2, "Esta es una frase bastante larga que no cabe en una sola línea de subtítulo, así que se parte en dos o más."),
+        (3661.5, 3662.25, "Corta."),
+    ])
+    bloques = srt.strip().split("\n\n")
+    assert bloques[0].split("\n") == [
+        "1", "00:00:00,000 --> 00:00:02,294", "Esta es una frase bastante larga que", "no cabe en una sola línea de subtítulo,",
+    ]  # «no» no queda colgando al final de la primera línea
+    assert all(len(linea) <= 42 for bloque in bloques for linea in bloque.split("\n")[2:])
+    assert all(len(bloque.split("\n")) <= 4 for bloque in bloques)  # número, tiempos y hasta 2 líneas
+    assert bloques[1].split("\n")[1] == "00:00:02,294 --> 00:00:03,200"  # el tiempo se reparte por caracteres (76 + 30)
+    assert bloques[2] == "3\n01:01:01,500 --> 01:01:02,250\nCorta."
+
+
+def test_dos_lineas_parejas(funciones):
+    texto = funciones.ns["_en_dos_lineas"]("uno dos tres cuatro cinco seis siete ocho nueve diez".split(), 42)
+    primera, segunda = texto.split("\n")
+    assert abs(len(primera) - len(segunda)) <= 6
+
+
+def test_distancia_edicion_frente_a_la_tabla_clasica(funciones):
+    import random
+
+    distancia = funciones.ns["distancia_edicion"]
+
+    def tabla(a, b):
+        fila = list(range(len(b) + 1))
+        for i, ca in enumerate(a, 1):
+            nueva = [i]
+            for j, cb in enumerate(b, 1):
+                nueva.append(min(fila[j] + 1, nueva[j - 1] + 1, fila[j - 1] + (ca != cb)))
+            fila = nueva
+        return fila[-1]
+
+    rng = random.Random(7)
+    for _ in range(2000):
+        a = "".join(rng.choice("abcñá ") for _ in range(rng.randrange(0, 70)))
+        b = "".join(rng.choice("abcñá ") for _ in range(rng.randrange(0, 70)))
+        assert distancia(a, b) == tabla(a, b) == distancia(b, a)
+    assert distancia("x" * 300 + "hola", "hola" + "y" * 250) == tabla("x" * 300 + "hola", "hola" + "y" * 250)
+
+
+def test_tasa_de_error_por_caracteres(funciones):
+    tasa = funciones.ns["tasa_error_caracteres"]
+    assert tasa("Cuesta mil quinientos soles.", "cuesta 1500 soles", "es") == 0.0  # cifras como palabras
+    assert tasa("¡Hola, Señor Pérez!", "hola senor perez") == 0.0  # sin tildes ni signos
+    assert tasa("hola mundo", "") == 1.0
+    assert 0.0 < tasa("buenos días a todos", "buenos días a todo", "es") < 0.1
+
+
+def test_lineas_de_subtitulo_sin_palabras_colgando(funciones):
+    import random
+
+    lineas_voraces = funciones.ns["_lineas_voraces"]
+    assert lineas_voraces("y empieza el lunes, a las ocho de la mañana en el aula".split(), 33) == [
+        ["y", "empieza", "el", "lunes,", "a", "las", "ocho"], ["de", "la", "mañana", "en", "el", "aula"],
+    ]
+    assert funciones.ns["_en_dos_lineas"]("Hoy la matrícula cuesta S/ 1,500.50 y empieza el lunes.".split(), 42) == (
+        "Hoy la matrícula cuesta\nS/ 1,500.50 y empieza el lunes."  # «S/» no se separa de su monto
+    )
+    rng = random.Random(3)
+    palabras = "a el de la S/ y en un casa programa matrícula extraordinariamente supercalifragilisticoespialidoso".split()
+    for _ in range(2000):
+        texto = [rng.choice(palabras) for _ in range(rng.randrange(1, 40))]
+        lineas = lineas_voraces(texto, 42)
+        assert sum(lineas, []) == texto  # no se pierde ni se reordena nada
+        assert all(len(" ".join(linea)) <= 42 or len(linea) == 1 for linea in lineas)
